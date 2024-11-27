@@ -1,68 +1,44 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import {
   LayoutChangeEvent,
   NativeScrollEvent,
   NativeSyntheticEvent,
-  StyleProp,
+  GestureResponderEvent,
+  ScrollView,
+  FlatList,
   ViewStyle,
 } from "react-native";
 import {
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
+  withTiming,
   AnimatedStyle,
 } from "react-native-reanimated";
 
-interface CustomScrollIndicatorReturn {
+type ScrollViewRef = ScrollView;
+type FlatListRef = FlatList<any>;
+type ScrollableRef<T> = T extends ScrollView ? ScrollViewRef : FlatListRef;
+
+/**
+ * Interface for the return type of the useCustomScrollIndicator hook.
+ */
+interface CustomScrollIndicatorReturn<T> {
   handleScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   handleLayout: (event: LayoutChangeEvent) => void;
   handleContentSizeChange: (width: number, height: number) => void;
-  indicatorStyle: StyleProp<AnimatedStyle<StyleProp<ViewStyle>>>;
-  trackStyle: StyleProp<ViewStyle>;
+  handleTrackTouchStart: (event: GestureResponderEvent) => void;
+  handleTrackTouchMove: (event: GestureResponderEvent) => void;
+  handleTrackTouchEnd: () => void;
+  indicatorStyle: AnimatedStyle<ViewStyle>;
+  trackStyle: AnimatedStyle<ViewStyle>;
+  scrollableRef: React.RefObject<ScrollableRef<T>>;
 }
 
 /**
- * A custom hook that provides functionality for a custom scroll indicator/scrollbar.
+ * Custom hook to manage a scroll indicator for ScrollView and FlatList components.
  *
- * This hook manages the scroll indicator's position and size based on the scroll position
- * and container dimensions. It uses react-native-reanimated for smooth animations.
- *
- * @returns {Object} An object containing:
- *   - handleScroll: Callback for ScrollView's onScroll event
- *   - handleLayout: Callback for ScrollView's onLayout event
- *   - handleContentSizeChange: Callback for ScrollView's onContentSizeChange event
- *   - indicatorStyle: Animated style for the scroll indicator (thumb)
- *   - trackStyle: Animated style for the scroll track (background)
- *
- * @example
- * ```tsx
- * const MyScrollView = () => {
- *   const {
- *     handleScroll,
- *     handleLayout,
- *     handleContentSizeChange,
- *     indicatorStyle,
- *     trackStyle
- *   } = useCustomScrollIndicator();
- *
- *   return (
- *     <View style={{ flex: 1 }}>
- *       <ScrollView
- *         onScroll={handleScroll}
- *         onLayout={handleLayout}
- *         onContentSizeChange={handleContentSizeChange}
- *         scrollEventThrottle={16}
- *       >
- *         {/* Your content *\/}
- *       </ScrollView>
- *
- *       <Animated.View style={[styles.track, trackStyle]}>
- *         <Animated.View style={[styles.indicator, indicatorStyle]} />
- *       </Animated.View>
- *     </View>
- *   );
- * };
- * ```
+ * @template T - The type of the scrollable component (ScrollView or FlatList).
+ * @returns {CustomScrollIndicatorReturn<T>} An object containing handlers and styles for the scroll indicator.
  *
  * @limitations
  * 1. Padding: This hook does not account for ScrollView's contentContainerStyle padding
@@ -75,14 +51,41 @@ interface CustomScrollIndicatorReturn {
  * 3. Nested ScrollViews: May not work correctly with nested scroll views as it only
  *    tracks a single scroll position.
  *
- * @performance
- * This hook uses Reanimated's shared values and animated styles to ensure smooth
- * animations that run on the UI thread. It avoids React state to minimize re-renders.
- *
- * @styling
- * You'll need to provide your own styles for the track and indicator. Example styles:
+ * @example
  * ```tsx
+ * import React from 'react';
+ * import { ScrollView, View, StyleSheet } from 'react-native';
+ * import { useCustomScrollIndicator } from 'path/to/hooks';
+ *
+ * const MyComponent = () => {
+ *   const {
+ *     handleScroll,
+ *     handleLayout,
+ *     indicatorStyle,
+ *     trackStyle,
+ *     scrollableRef,
+ *   } = useCustomScrollIndicator<ScrollView>();
+ *
+ *   return (
+ *     <View style={styles.container}>
+ *       <ScrollView
+ *         ref={scrollableRef}
+ *         onScroll={handleScroll}
+ *         onLayout={handleLayout}
+ *         scrollEventThrottle={16}
+ *       >
+ *         {/* Your scrollable content goes here *\/}
+ *       </ScrollView>
+ *       <View style={[styles.track, trackStyle]} />
+ *       <View style={[styles.indicator, indicatorStyle]} />
+ *     </View>
+ *   );
+ * };
+ *
  * const styles = StyleSheet.create({
+ *   container: {
+ *     flex: 1,
+ *   },
  *   track: {
  *     position: 'absolute',
  *     right: 4,
@@ -97,72 +100,141 @@ interface CustomScrollIndicatorReturn {
  *   },
  * });
  * ```
+ *
+ * @performance
+ * This hook uses Reanimated's shared values and animated styles to ensure smooth
+ * animations that run on the UI thread. It avoids React state to minimize re-renders.
+ *
+ * @remarks
+ * This hook provides a custom scroll indicator for ScrollView and FlatList components.
+ * It manages the visibility and position of the scroll indicator based on the scroll position.
+ *
+ * Pitfalls:
+ * - This hook does not account for any padding that may be applied to the ScrollView or FlatList.
+ *   Ensure to adjust the calculations if padding is used to avoid incorrect scroll indicator positioning.
  */
-export const useCustomScrollIndicator = (): CustomScrollIndicatorReturn => {
+export const useCustomScrollIndicator = <
+  T extends ScrollView | FlatList<any>
+>(): CustomScrollIndicatorReturn<T> => {
+  const scrollViewHeight = useSharedValue(0);
+  const contentHeight = useSharedValue(0);
   const scrollPosition = useSharedValue(0);
-  const contentSize = useSharedValue(0);
-  const containerSize = useSharedValue(0);
+  const isDraggingWithTrack = useSharedValue(false);
+  const isScrolling = useSharedValue(false);
+  const opacity = useSharedValue(0);
+  const scrollableRef = useRef<ScrollableRef<T>>(null);
 
-  const handleScroll = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const {
-        contentOffset,
-        contentSize: size,
-        layoutMeasurement,
-      } = event.nativeEvent;
+  let hideTimeout: NodeJS.Timeout;
 
-      const maxScroll = size.height - layoutMeasurement.height;
-      const currentPosition = Math.max(
-        0,
-        Math.min(1, contentOffset.y / maxScroll)
+  const showScrollIndicator = () => {
+    clearTimeout(hideTimeout);
+    opacity.value = withTiming(1, { duration: 150 });
+
+    hideTimeout = setTimeout(() => {
+      if (!isDraggingWithTrack.value) {
+        opacity.value = withTiming(0, { duration: 300 });
+      }
+    }, 1000);
+  };
+
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    console.log({ isDragging: isDraggingWithTrack.value });
+    if (!isDraggingWithTrack.value) {
+      scrollPosition.value = event.nativeEvent.contentOffset.y;
+      isScrolling.value = true;
+      showScrollIndicator();
+    }
+  };
+
+  const handleLayout = (event: LayoutChangeEvent) => {
+    scrollViewHeight.value = event.nativeEvent.layout.height;
+  };
+
+  const handleContentSizeChange = (_: number, height: number) => {
+    contentHeight.value = height;
+  };
+
+  const calculateScrollPosition = (locationY: number) => {
+    const trackHeight = scrollViewHeight.value - 32;
+    const contentSize = contentHeight.value - scrollViewHeight.value;
+    return Math.max(
+      0,
+      Math.min(contentSize, (locationY / trackHeight) * contentSize)
+    );
+  };
+
+  const scrollTo = (y: number, animated: boolean) => {
+    if (scrollableRef.current) {
+      if ("scrollTo" in scrollableRef.current) {
+        (scrollableRef.current as ScrollView).scrollTo({ y, animated });
+      } else {
+        (scrollableRef.current as FlatList<any>).scrollToOffset({
+          offset: y,
+          animated,
+        });
+      }
+    }
+  };
+
+  const handleTrackTouchStart = useCallback((event: GestureResponderEvent) => {
+    isDraggingWithTrack.value = true;
+    opacity.value = withTiming(1, { duration: 150 });
+    const newScrollPosition = calculateScrollPosition(
+      event.nativeEvent.locationY
+    );
+    scrollTo(newScrollPosition, true);
+  }, []);
+
+  const handleTrackTouchMove = useCallback((event: GestureResponderEvent) => {
+    if (isDraggingWithTrack.value) {
+      const newScrollPosition = calculateScrollPosition(
+        event.nativeEvent.locationY
       );
-
-      scrollPosition.value = withSpring(currentPosition, {
-        damping: 15,
-        stiffness: 100,
-      });
-    },
-    []
-  );
-
-  const handleLayout = useCallback((event: LayoutChangeEvent) => {
-    const { height } = event.nativeEvent.layout;
-    containerSize.value = height;
+      scrollTo(newScrollPosition, false);
+    }
   }, []);
 
-  const handleContentSizeChange = useCallback((_: number, height: number) => {
-    contentSize.value = height;
-  }, []);
-
-  const indicatorStyle = useAnimatedStyle(() => {
-    const scrollIndicatorSize =
-      containerSize.value > 0
-        ? (containerSize.value / contentSize.value) * containerSize.value
-        : 0;
-
-    const maxTranslation = containerSize.value - scrollIndicatorSize;
-
-    return {
-      height: scrollIndicatorSize,
-      transform: [
-        {
-          translateY: scrollPosition.value * maxTranslation,
-        },
-      ],
-    };
+  const handleTrackTouchEnd = useCallback(() => {
+    isDraggingWithTrack.value = false;
+    showScrollIndicator();
   }, []);
 
   const trackStyle = useAnimatedStyle(() => {
     return {
-      height: containerSize.value,
+      width: 8,
+      opacity: opacity.value,
     };
-  }, []);
+  });
+
+  const indicatorStyle = useAnimatedStyle(() => {
+    const indicatorHeight = Math.max(
+      (scrollViewHeight.value / contentHeight.value) * scrollViewHeight.value,
+      30
+    );
+
+    const percentage = Math.min(
+      scrollPosition.value /
+        Math.max(contentHeight.value - scrollViewHeight.value, 1),
+      1
+    );
+
+    const translateY = percentage * (scrollViewHeight.value - indicatorHeight);
+
+    return {
+      height: indicatorHeight,
+      transform: [{ translateY }],
+    };
+  });
 
   return {
     handleScroll,
     handleLayout,
     handleContentSizeChange,
+    handleTrackTouchStart,
+    handleTrackTouchMove,
+    handleTrackTouchEnd,
     indicatorStyle,
     trackStyle,
+    scrollableRef,
   };
 };
