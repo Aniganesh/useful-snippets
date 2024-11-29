@@ -19,9 +19,6 @@ type ScrollViewRef = ScrollView;
 type FlatListRef = FlatList<any>;
 type ScrollableRef<T> = T extends ScrollView ? ScrollViewRef : FlatListRef;
 
-/**
- * Interface for the return type of the useCustomScrollIndicator hook.
- */
 interface CustomScrollIndicatorReturn<T> {
   handleScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
   handleLayout: (event: LayoutChangeEvent) => void;
@@ -138,7 +135,6 @@ export const useCustomScrollIndicator = <
   };
 
   const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    console.log({ isDragging: isDraggingWithTrack.value });
     if (!isDraggingWithTrack.value) {
       scrollPosition.value = event.nativeEvent.contentOffset.y;
       isScrolling.value = true;
@@ -212,11 +208,8 @@ export const useCustomScrollIndicator = <
       30
     );
 
-    const percentage = Math.min(
-      scrollPosition.value /
-        Math.max(contentHeight.value - scrollViewHeight.value, 1),
-      1
-    );
+    const percentage =
+      scrollPosition.value / (contentHeight.value - scrollViewHeight.value);
 
     const translateY = percentage * (scrollViewHeight.value - indicatorHeight);
 
