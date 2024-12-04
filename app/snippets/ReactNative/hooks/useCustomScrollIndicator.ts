@@ -16,7 +16,7 @@ import {
 } from "react-native-reanimated";
 
 type ScrollViewRef = ScrollView;
-type FlatListRef = FlatList<any>;
+type FlatListRef = FlatList<never>;
 type ScrollableRef<T> = T extends ScrollView ? ScrollViewRef : FlatListRef;
 
 interface CustomScrollIndicatorReturn<T> {
@@ -111,7 +111,7 @@ interface CustomScrollIndicatorReturn<T> {
  *   Ensure to adjust the calculations if padding is used to avoid incorrect scroll indicator positioning.
  */
 export const useCustomScrollIndicator = <
-  T extends ScrollView | FlatList<any>
+  T extends ScrollView | FlatList<never>
 >(): CustomScrollIndicatorReturn<T> => {
   const scrollViewHeight = useSharedValue(0);
   const contentHeight = useSharedValue(0);
@@ -164,7 +164,7 @@ export const useCustomScrollIndicator = <
       if ("scrollTo" in scrollableRef.current) {
         (scrollableRef.current as ScrollView).scrollTo({ y, animated });
       } else {
-        (scrollableRef.current as FlatList<any>).scrollToOffset({
+        (scrollableRef.current as FlatList<never>).scrollToOffset({
           offset: y,
           animated,
         });
